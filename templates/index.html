@@ -1,0 +1,152 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>MNIST 손글씨 숫자 인식기</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>MNIST 손글씨 숫자 인식 ✍️</h1>
+    <p class="subtitle">캔버스에 숫자를 그리고 "예측하기" 버튼을 눌러보세요.</p>
+
+    <div class="main-content">
+      <div class="canvas-container">
+        <canvas id="board" width="280" height="280"></canvas>
+        <div class="tools">
+          <label>펜 굵기
+            <input id="size" type="range" min="8" max="40" value="24"/>
+          </label>
+          <button id="clear" type="button" class="btn">지우기</button>
+          <button id="predict" type="button" class="btn btn-predict">예측하기</button>
+        </div>
+      </div>
+      
+      <div class="result-container">
+        <h2>예측 결과 📊</h2>
+        <div id="result-text" class="result-text"></div>
+        <div class="chart-container">
+          <canvas id="probChart"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('board');
+    const ctx = canvas.getContext('2d');
+    const sizeEl = document.getElementById('size');
+    const clearBtn = document.getElementById('clear');
+    const predictBtn = document.getElementById('predict');
+    const resultEl = document.getElementById('result-text');
+    const chartCanvas = document.getElementById('probChart');
+
+    // --- 캔버스 초기 설정 ---
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = '#000';
+
+    // --- 막대그래프 초기 설정 ---
+    let probChart = new Chart(chartCanvas, {
+      type: 'bar',
+      data: {
+        labels: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'],
+        datasets: [{
+          label: '예측 확률',
+          data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+          backgroundColor: [
+              'rgba(255, 99, 132, 0.6)', 'rgba(54, 162, 235, 0.6)',
+              'rgba(255, 206, 86, 0.6)', 'rgba(75, 192, 192, 0.6)',
+              'rgba(153, 102, 255, 0.6)', 'rgba(255, 159, 64, 0.6)',
+              'rgba(99, 255, 132, 0.6)', 'rgba(235, 54, 162, 0.6)',
+              'rgba(86, 255, 206, 0.6)', 'rgba(192, 75, 192, 0.6)'
+          ],
+          borderColor: [
+              'rgba(255, 99, 132, 1)', 'rgba(54, 162, 235, 1)',
+              'rgba(255, 206, 86, 1)', 'rgba(75, 192, 192, 1)',
+              'rgba(153, 102, 255, 1)', 'rgba(255, 159, 64, 1)',
+              'rgba(99, 255, 132, 1)', 'rgba(235, 54, 162, 1)',
+              'rgba(86, 255, 206, 1)', 'rgba(192, 75, 192, 1)'
+          ],
+          borderWidth: 1
+        }]
+      },
+      options: {
+        // ### 세로 막대그래프로 변경 (indexAxis 속성 제거) ###
+        scales: {
+          y: { // y축 옵션
+            beginAtZero: true,
+            max: 1.0,
+            ticks: { callback: value => (value * 100).toFixed(0) + '%' }
+          }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    // --- 그리기 로직 ---
+    let drawing = false;
+    let last = null;
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+    function start(e) { drawing = true; ctx.lineWidth = Number(sizeEl.value); last = getPos(e); }
+    function move(e) {
+      if (!drawing) return;
+      e.preventDefault();
+      const p = getPos(e);
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      last = p;
+    }
+    function end() { drawing = false; last = null; }
+
+    canvas.addEventListener('mousedown', start);
+    canvas.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', end);
+    canvas.addEventListener('touchstart', start, { passive: false });
+    canvas.addEventListener('touchmove', move, { passive: false });
+    canvas.addEventListener('touchend', end);
+
+    // --- 버튼 이벤트 ---
+    clearBtn.addEventListener('click', () => {
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      resultEl.innerHTML = '';
+      probChart.data.datasets[0].data = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+      probChart.update();
+    });
+
+    predictBtn.addEventListener('click', async () => {
+      resultEl.innerHTML = '<span>예측 중...</span>';
+      
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+      const fd = new FormData();
+      fd.append('file', blob, 'drawn.png');
+      
+      try {
+        const response = await fetch('/predict', { method: 'POST', body: fd });
+        const data = await response.json();
+        
+        if (data.error) {
+          resultEl.innerHTML = `<span class="error">에러: ${data.error}</span>`;
+        } else {
+          resultEl.innerHTML = `가장 높은 확률은 <strong>${data.digit}</strong> 입니다. <span>(${(data.prob*100).toFixed(2)}%)</span>`;
+          probChart.data.datasets[0].data = data.probabilities;
+          probChart.update();
+        }
+      } catch (e) {
+        resultEl.innerHTML = '<span class="error">네트워크 또는 서버 에러가 발생했습니다.</span>';
+      }
+    });
+  </script>
+</body>
+</html>
